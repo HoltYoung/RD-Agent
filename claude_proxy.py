@@ -59,7 +59,7 @@ def refresh_access_token():
         return False
     try:
         resp = httpx.post(
-            "https://console.anthropic.com/api/oauth/token",
+            "https://console.anthropic.com/v1/oauth/token",
             json={
                 "grant_type": "refresh_token",
                 "refresh_token": REFRESH_TOKEN,
