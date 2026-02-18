@@ -24,6 +24,7 @@ from rdagent.app.general_model.general_model import (
     extract_models_and_implement as general_model,
 )
 from rdagent.app.qlib_rd_loop.factor import main as fin_factor
+from rdagent.app.us_equity_rd_loop.factor import main as us_equity_factor
 from rdagent.app.qlib_rd_loop.factor_from_report import main as fin_factor_report
 from rdagent.app.qlib_rd_loop.model import main as fin_model
 from rdagent.app.qlib_rd_loop.quant import main as fin_quant
@@ -81,6 +82,7 @@ app.command(name="server_ui")(server_ui)
 app.command(name="health_check")(health_check)
 app.command(name="collect_info")(collect_info)
 app.command(name="ds_user_interact")(ds_user_interact)
+app.command(name="us_equity_factor")(us_equity_factor)
 
 
 if __name__ == "__main__":

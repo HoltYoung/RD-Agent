@@ -90,7 +90,7 @@ class MultiProcessEvolvingStrategy(EvolvingStrategy):
         to_be_finished_task_index: list[int] = []
         for index, target_task in enumerate(evo.sub_tasks):
             target_task_desc = target_task.get_task_information()
-            if target_task_desc in queried_knowledge.success_task_to_knowledge_dict:
+            if queried_knowledge is not None and target_task_desc in queried_knowledge.success_task_to_knowledge_dict:
                 # NOTE: very weird logic:
                 # it depends on the knowledge to set the already finished task
                 code_list[index] = queried_knowledge.success_task_to_knowledge_dict[
@@ -104,7 +104,7 @@ class MultiProcessEvolvingStrategy(EvolvingStrategy):
                     last_feedback is None
                     or (isinstance(last_feedback, CoSTEERMultiFeedback) and last_feedback[index] is None)
                 )
-                if target_task_desc not in queried_knowledge.failed_task_info_set and not skip_for_improve_mode:
+                if (queried_knowledge is None or target_task_desc not in queried_knowledge.failed_task_info_set) and not skip_for_improve_mode:
                     to_be_finished_task_index.append(index)
                 if skip_for_improve_mode:
                     code_list[index] = (

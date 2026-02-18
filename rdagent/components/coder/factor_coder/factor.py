@@ -157,7 +157,7 @@ class FactorFBWorkspace(FBWorkspace):
                 execution_code_path = code_path
             elif self.target_task.version == 2:
                 execution_code_path = self.workspace_path / f"{uuid.uuid4()}.py"
-                execution_code_path.write_text((Path(__file__).parent / "factor_execution_template.txt").read_text())
+                execution_code_path.write_text((Path(__file__).parent / "factor_execution_template.txt").read_text(encoding="utf-8"), encoding="utf-8")
 
             try:
                 subprocess.check_output(

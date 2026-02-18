@@ -1,0 +1,177 @@
+us_equity_factor_background: |-
+  You are a quantitative researcher developing alpha factors for a long-short dollar-neutral equity strategy on a universe of ~600 US stocks.
+  A factor is a numerical signal computed for each stock on each trading day. Factors are used to rank stocks cross-sectionally — the top-ranked stocks are bought (long) and the bottom-ranked stocks are sold (short) in equal dollar amounts.
+  Good factors have high Information Coefficient (IC) — the cross-sectional correlation between the factor value and subsequent returns.
+
+  Each factor is defined by:
+  1. Name: A descriptive name for the factor.
+  2. Description: What the factor captures (momentum, value, quality, etc.).
+  3. Formulation: The mathematical formula.
+  4. Variables: The variables or functions used in the formulation.
+
+  Please specify all hyperparameters (window sizes, lookback periods, etc.). Each factor should produce one static output per stock per day.
+
+us_equity_factor_interface: |-
+  Your python code should follow this interface:
+  - Import section, function section, and main section
+  - Write a main function named "calculate_{function_name}" and call it in the `if __name__ == "__main__"` block
+  - Do NOT write try-except blocks — exceptions are caught by the system
+  - Read data from HDF5 files in the current directory using `pd.read_hdf("daily_pv.h5", key="data")`
+  - Fundamentals data (if needed) is available via `pd.read_hdf("fundamentals.h5", key="data")`
+  - Save your result to "result.h5" with `result_df.to_hdf("result.h5", key="data", mode="w")`
+  - The result must be a pandas DataFrame with MultiIndex [datetime, instrument] and a single column named after your factor
+
+  CRITICAL: The HDF5 data already has a properly typed MultiIndex (datetime, instrument). Do NOT call set_levels(), set_names(), or pd.to_datetime() on the index. Just read it and use it as-is.
+
+  Here is a complete working example of a simple momentum factor:
+
+  ```python
+  import pandas as pd
+
+  def calculate_Momentum5D():
+      # Read price data — index is already MultiIndex [datetime, instrument]
+      df = pd.read_hdf("daily_pv.h5", key="data")
+
+      # Calculate 5-day momentum per stock
+      close = df["$close"]
+      prev_close = df.groupby(level="instrument")["$close"].shift(5)
+      momentum = (close - prev_close) / prev_close
+
+      # Create result DataFrame with single column
+      result = momentum.to_frame(name="Momentum5D")
+      result.to_hdf("result.h5", key="data", mode="w")
+
+  if __name__ == "__main__":
+      calculate_Momentum5D()
+  ```
+
+  For fundamentals-based factors:
+  ```python
+  import pandas as pd
+
+  def calculate_EarningsYield():
+      pv = pd.read_hdf("daily_pv.h5", key="data")
+      fund = pd.read_hdf("fundamentals.h5", key="data")
+
+      # Both DataFrames share the same MultiIndex [datetime, instrument]
+      adj_close = pv["$close"] * pv["$factor"]
+      eps = fund["xbrl_is_EarningsPerShareBasic"]
+
+      # Compute ratio — alignment is automatic since both share the same index
+      earnings_yield = eps / adj_close
+
+      result = earnings_yield.to_frame(name="EarningsYield")
+      result.to_hdf("result.h5", key="data", mode="w")
+
+  if __name__ == "__main__":
+      calculate_EarningsYield()
+  ```
+
+  Rolling window factor (volatility):
+  ```python
+  import pandas as pd
+  import numpy as np
+
+  def calculate_Volatility20D():
+      df = pd.read_hdf("daily_pv.h5", key="data")
+      ret = df.groupby(level="instrument")["$close"].pct_change()
+      vol = ret.groupby(level="instrument").rolling(20).std().droplevel(0)
+      result = vol.to_frame(name="Volatility20D")
+      result.to_hdf("result.h5", key="data", mode="w")
+
+  if __name__ == "__main__":
+      calculate_Volatility20D()
+  ```
+
+  Fundamental ratio factor (accruals):
+  ```python
+  import pandas as pd
+
+  def calculate_AccrualRatio():
+      fund = pd.read_hdf("fundamentals.h5", key="data")
+      net_income = fund["xbrl_is_NetIncomeLoss"]
+      op_cf = fund["xbrl_cf_NetCashProvidedByUsedInOperatingActivities"]
+      assets = fund["xbrl_bs_Assets"]
+      accrual = (net_income - op_cf) / assets
+      result = accrual.to_frame(name="AccrualRatio")
+      result.to_hdf("result.h5", key="data", mode="w")
+
+  if __name__ == "__main__":
+      calculate_AccrualRatio()
+  ```
+
+  Volume-based factor:
+  ```python
+  import pandas as pd
+
+  def calculate_VolumeSurge():
+      df = pd.read_hdf("daily_pv.h5", key="data")
+      vol = df["$volume"]
+      avg_vol = df.groupby(level="instrument")["$volume"].rolling(20).mean().droplevel(0)
+      surge = vol / avg_vol
+      result = surge.to_frame(name="VolumeSurge")
+      result.to_hdf("result.h5", key="data", mode="w")
+
+  if __name__ == "__main__":
+      calculate_VolumeSurge()
+  ```
+
+us_equity_factor_strategy: |-
+  The data has a MultiIndex with 'datetime' and 'instrument' levels. The index is already correctly typed — do NOT modify it.
+  Key patterns:
+  1. Per-stock time-series operations: `df.groupby(level='instrument')['$close'].shift(5)` or `.pct_change(5)`
+  2. Cross-sectional operations: `df.groupby(level='datetime')['factor'].rank()`
+  3. Both daily_pv.h5 and fundamentals.h5 share the same MultiIndex, so arithmetic between their columns aligns automatically
+  4. Use `.to_frame(name="YourFactorName")` to convert a Series to a single-column DataFrame for output
+  5. NEVER call set_levels(), set_names(), or pd.to_datetime() on the index — it will cause errors
+
+us_equity_factor_output_format: |-
+  Your output should be a pandas DataFrame similar to this:
+  <class 'pandas.core.frame.DataFrame'>
+  MultiIndex: 750000 entries, (Timestamp('2020-10-26'), 'AAPL') to (Timestamp('2026-02-14'), 'ZTS')
+  Data columns (total 1 columns):
+  #   Column            Non-Null Count  Dtype
+  ---  ------            --------------  -----
+  0   your_factor_name  750000 non-null  float64
+  dtypes: float64(1)
+
+  Example values:
+  datetime    instrument
+  2021-01-04  AAPL          0.0234
+              MSFT         -0.0156
+              AMZN          0.0078
+              GOOGL         0.0012
+  2021-01-05  AAPL          0.0189
+              MSFT         -0.0201
+
+us_equity_factor_simulator: |-
+  Your factors will be evaluated as follows:
+  1. Factor values are computed across the full ~600 stock universe
+  2. Information Coefficient (IC) is computed: daily cross-sectional Pearson correlation between factor values and next-day forward returns
+  3. Rank IC is computed: daily cross-sectional Spearman rank correlation
+  4. ICIR = mean(IC) / std(IC) measures signal stability
+  5. A LightGBM model is trained on all accumulated factors to produce a combined signal
+  6. Long-short returns are computed: top quintile return minus bottom quintile return
+
+  A good factor for a long-short dollar-neutral strategy should:
+  - Have high absolute IC (> 0.02 is good, > 0.05 is excellent)
+  - Have high ICIR (> 0.5 is good, > 1.0 is excellent)
+  - Add incremental value when combined with existing factors (not be redundant)
+
+us_equity_factor_rich_style_description: |-
+  ### US Equity Factor Discovery for Long-Short Dollar-Neutral Strategy
+
+  #### [Overview](#_summary)
+  Automated discovery and evolution of alpha factors for cross-sectional equity ranking.
+
+  #### [Automated R&D](#_rdloops)
+  - **[R (Research)](#_research)**: AI proposes factor hypotheses based on financial intuition and prior results
+  - **[D (Development)](#_development)**: Factors are coded, computed across 600 stocks, and evaluated via IC/Rank IC
+
+  #### [Objective](#_summary)
+  Build a library of complementary alpha factors that predict cross-sectional stock returns.
+
+us_equity_factor_experiment_setting: |-
+  | Universe | Model | Factors | Data Split |
+  |----------|-------|---------|------------|
+  | ~600 US Equities | LightGBM | Custom + Evolved | Train: {{ train_start }} to {{ train_end }}, Valid: {{ valid_start }} to {{ valid_end }}, Test: {{ test_start }} to {{ test_end }} |

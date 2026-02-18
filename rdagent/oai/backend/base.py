@@ -25,6 +25,27 @@ from rdagent.oai.llm_conf import LLM_SETTINGS
 from rdagent.oai.utils.embedding import truncate_content_list
 from rdagent.utils import md5_hash
 
+# Model rotation disabled — using user-configured model from .env (CHAT_MODEL).
+# Fallback models only used if the primary model is exhausted.
+_FALLBACK_MODELS: list[str] = []  # Populated at runtime from the configured model
+_exhausted_models: set[str] = set()
+_preferred_model: str | None = None
+
+
+def _set_chat_model(model: str) -> None:
+    """Update chat_model on ALL settings instances (LLM_SETTINGS + backend-specific)."""
+    LLM_SETTINGS.chat_model = model
+    try:
+        from rdagent.oai.backend.litellm import LITELLM_SETTINGS
+        LITELLM_SETTINGS.chat_model = model
+    except ImportError:
+        pass
+
+
+def _get_best_available_model() -> str:
+    """Return the configured model (no rotation)."""
+    return LLM_SETTINGS.chat_model
+
 try:
     import litellm
     import openai
@@ -468,6 +489,12 @@ class APIBackend(ABC):
         timeout_count = 0
         violation_count = 0
         embedding_truncated = False  # Track if we've already tried truncation
+        # Per-request: reset to best available model so small prompts use good models
+        _tpm_too_low: set[str] = set()  # Only for this request
+        best = _get_best_available_model()
+        if LLM_SETTINGS.chat_model != best:
+            logger.info(f"Resetting model to best available: {best}")
+            _set_chat_model(best)
         for i in range(max_retry):
             API_start_time = datetime.now()
             try:
@@ -541,6 +568,61 @@ class APIBackend(ABC):
                         match = re.search(r"Please retry after (\d+) seconds\.", e.message)
                         if match:
                             recommended_wait_seconds = int(match.group(1))
+
+                    # Auto-rotate model on daily quota exhaustion or rate limit
+                    error_str = str(e)
+                    is_daily_quota = (
+                        "PerDayPerProjectPerModel" in error_str
+                        or "free_tier_requests" in error_str
+                        or "tokens per day" in error_str.lower()
+                        or "(TPD)" in error_str
+                        or "requests per day" in error_str.lower()
+                        or "(RPD)" in error_str
+                    )
+                    is_tpm = "tokens per minute" in error_str.lower() or "(TPM)" in error_str
+                    is_rate_limit = "rate_limit" in error_str.lower() or "429" in error_str or "quota" in error_str.lower()
+
+                    is_request_too_large = "request too large" in error_str.lower() or "requested" in error_str.lower() and "limit" in error_str.lower() and is_tpm
+
+                    if is_request_too_large:
+                        # Single request exceeds model's TPM — skip for THIS request only (not permanent)
+                        current_model = LLM_SETTINGS.chat_model
+                        _tpm_too_low.add(current_model)
+                        logger.warning(f"Model {current_model} can't handle request size (TPM too low). Rotating.")
+                        rotated = False
+                        for fallback in _FALLBACK_MODELS:
+                            if fallback not in _exhausted_models and fallback not in _tpm_too_low and fallback != current_model:
+                                _set_chat_model(fallback)
+                                logger.warning(f"Rotating to {fallback}")
+                                rotated = True
+                                recommended_wait_seconds = 1
+                                break
+                        if not rotated:
+                            logger.warning("All models exhausted or TPM too low. Will keep retrying current model.")
+                            recommended_wait_seconds = 60
+                    elif is_tpm and not is_daily_quota and not is_request_too_large:
+                        # Temporary per-minute throttle — just wait, don't rotate
+                        wait_match = re.search(r"try again in (\d+(?:\.\d+)?)\s*s", error_str)
+                        if wait_match:
+                            recommended_wait_seconds = min(int(float(wait_match.group(1))) + 2, 120)
+                        else:
+                            recommended_wait_seconds = 10
+                    elif is_daily_quota or (is_rate_limit and i >= 3):
+                        current_model = LLM_SETTINGS.chat_model
+                        _exhausted_models.add(current_model)
+                        logger.warning(f"Model {current_model} exhausted (daily limit). Marked as exhausted.")
+                        rotated = False
+                        for fallback in _FALLBACK_MODELS:
+                            if fallback not in _exhausted_models and fallback not in _tpm_too_low and fallback != current_model:
+                                _set_chat_model(fallback)
+                                logger.warning(f"Rotating to {fallback}")
+                                rotated = True
+                                recommended_wait_seconds = 2
+                                break
+                        if not rotated:
+                            logger.warning("All models exhausted. Will keep retrying current model.")
+                            recommended_wait_seconds = 60
+
                     time.sleep(recommended_wait_seconds)
                     if RD_Agent_TIMER_wrapper.timer.started and not isinstance(e, json.decoder.JSONDecodeError):
                         RD_Agent_TIMER_wrapper.timer.add_duration(datetime.now() - API_start_time)

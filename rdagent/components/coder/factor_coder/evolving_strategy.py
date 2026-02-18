@@ -89,9 +89,11 @@ class FactorMultiProcessEvolvingStrategy(MultiProcessEvolvingStrategy):
 
         queried_former_failed_knowledge_to_render = queried_former_failed_knowledge
 
-        latest_attempt_to_latest_successful_execution = queried_knowledge.task_to_former_failed_traces[
-            target_factor_task_information
-        ][1]
+        latest_attempt_to_latest_successful_execution = (
+            queried_knowledge.task_to_former_failed_traces[target_factor_task_information][1]
+            if queried_knowledge is not None
+            else None
+        )
         system_prompt = T(".prompts:evolving_strategy_factor_implementation_v1_system").r(
             scenario=self.scen.get_scenario_all_desc(target_task, filtered_tag="feature"),
             queried_former_failed_knowledge=queried_former_failed_knowledge_to_render,

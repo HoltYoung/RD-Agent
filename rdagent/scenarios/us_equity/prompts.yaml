@@ -1,0 +1,154 @@
+hypothesis_and_feedback: |-
+  =========================================================
+  {% for experiment, feedback in trace.hist[-2:] %}
+  # Trial {{ loop.index }}:
+  Hypothesis: {{ experiment.hypothesis }}
+  Factors: {% for task in experiment.sub_tasks %}{% if task is not none and task.factor_name is defined %}{{ task.factor_name }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
+  {% if experiment.result is not none %}Result: IC={{ experiment.result.loc["IC"] | round(6) }}, ICIR={{ experiment.result.loc["ICIR"] | round(6) }}, L/S_Return={{ experiment.result.loc["Long_Short_Annual_Return"] | round(6) }}{% endif %}
+  Observation: {{ feedback.observations }}
+  Decision: {{ feedback.decision }}
+  =========================================================
+  {% endfor %}
+
+last_hypothesis_and_feedback: |-
+  ## Hypothesis
+  {{ experiment.hypothesis }}
+  ## Specific task:
+  {% for task in experiment.sub_tasks %}
+  {% if task is not none and task.get_task_brief_information is defined %}
+  {{ task.get_task_brief_information() }}
+  {% endif %}
+  {% endfor %}
+  ## Evaluation Results:
+  {% if experiment.result is not none %}
+  Result: {{ experiment.result.loc[["IC", "ICIR", "Long_Short_Annual_Return"]] }}
+  {% endif %}
+  Observation: {{ feedback.observations }}
+  Evaluation: {{ feedback.hypothesis_evaluation }}
+  Decision (Whether this experiment is SOTA): {{ feedback.decision }}
+  New Hypothesis (Given in feedback stage, for reference): {{ feedback.new_hypothesis }}
+  Reasoning: {{ feedback.reason }}
+
+factor_hypothesis_output_format: |-
+  The output should follow JSON format. The schema is as follows:
+  {
+  "hypothesis": "The new hypothesis generated based on the information provided. Limit to two or three sentences.",
+  "reason": "The reason why you generate this hypothesis. It should be comprehensive and logical. Limit to two or three sentences.",
+  }
+
+factor_hypothesis_specification: |-
+  TARGET: Achieve mean out-of-sample IC >= 0.05 and ICIR >= 0.5 on a rolling 5-day forward return backtest.
+
+  **CRITICAL: KEEP FACTORS SIMPLE. Complex multi-leg composites almost always fail to implement.**
+  **NOTE: Evaluation uses IC-WEIGHTED combination (positive-IC factors get more weight, negative-IC factors get zero weight). Your factor only needs to have positive IC to contribute.**
+  **NOTE: LightGBM evaluation already includes raw price/volume/fundamental features as baseline. Your LLM factors add INCREMENTAL alpha on top.**
+
+  1. **2-3 Simple Factors per Generation:**
+    - Each factor should be ONE formula, computable in ~10 lines of pandas code.
+    - DO NOT create "composite" factors that combine the outputs of other factors — the system combines factors automatically via IC-weighting and LightGBM.
+    - Use `groupby(level="instrument").shift()`, `.pct_change()`, `.rolling()` for time-series ops.
+    - Use `groupby(level="datetime").rank()` or `.transform("mean")` for cross-sectional ops.
+  2. **HIGHEST-ALPHA Patterns (FUNDAMENTAL factors dominate — prioritize these):**
+    - **Cash flow yield** (TOP alpha): derived_cf_yield or OperatingCashFlow / (close * shares)
+    - **Accruals ratio** (TOP alpha): derived_accruals or (NetIncome - OperatingCF) / Assets
+    - **ROE / ROA changes**: Quarter-over-quarter change in derived_roe, derived_roa (shift by 63 days)
+    - **Earnings yield**: derived_ep or EPS / adjusted_close
+    - **Buyback yield**: derived_buyback_yield (already pre-computed)
+    - **Gross profit to assets**: derived_gp_to_assets (Novy-Marx quality factor)
+    - **Revenue growth**: pct_change of xbrl_is_Revenues over 252 trading days
+    - **Working capital efficiency**: derived_wc_to_assets change over 63 days
+    - **Debt-equity dynamics**: derived_debt_equity level or change
+    - **Current ratio change**: derived_current_ratio change over 63 days
+  3. **MOMENTUM / TECHNICAL Patterns (useful but lower alpha than fundamentals):**
+    - **12-1 month momentum**: 252-day return minus 21-day return
+    - **Short-term reversal**: negative 5-day return
+    - **52-week high distance**: close / rolling 252-day max - 1
+    - **Volume surge**: $volume / $vol_ma20
+    - **Volatility ratio**: $vol_5d / $vol_20d (short vs long volatility)
+  3. **Implementation Rules:**
+    - Each factor is ONE python file that reads HDF5 data and outputs ONE column.
+    - DO NOT reference or import other factor outputs.
+    - DO NOT use rolling regressions (e.g., rolling OLS/beta) — these are too complex and crash.
+    - Use simple rolling window operations: `.rolling(N).mean()`, `.rolling(N).std()`, `.pct_change(N)`.
+    - Forward returns are 5-day (weekly), so use lookback periods of 5-20 days for price signals and 63-252 days for fundamental signals.
+  4. **Important Notes:**
+    - Factors surpassing SOTA are kept in the library — do not re-implement them.
+    - Each factor must vary cross-sectionally (different values for different stocks on the same day).
+    - Only reply with one set of hypothesis and reason, even if proposing multiple factors.
+
+factor_experiment_output_format: |-
+  The output should follow JSON format. The schema is as follows:
+  {
+      "factor name 1": {
+          "description": "description of factor 1, start with its type, e.g. [Momentum Factor]",
+          "formulation": "latex formulation of factor 1",
+          "variables": {
+              "variable or function name 1": "description of variable or function 1",
+              "variable or function name 2": "description of variable or function 2"
+          }
+      },
+      "factor name 2": {
+          "description": "description of factor 2, start with its type, e.g. [Value Factor]",
+          "formulation": "latex formulation of factor 2",
+          "variables": {
+              "variable or function name 1": "description of variable or function 1",
+              "variable or function name 2": "description of variable or function 2"
+          }
+      }
+  }
+
+factor_feedback_generation:
+  system: |-
+    You are a professional quantitative researcher at a top hedge fund specializing in long-short equity strategies.
+    The task is described in the following scenario:
+
+    {{ scenario }}
+
+    TARGET: Achieve mean out-of-sample IC >= 0.05 and ICIR >= 0.5 on a 5-day forward return rolling backtest.
+
+    You will receive a hypothesis, multiple tasks with their factors, their results, and the SOTA result.
+    Your feedback should specify whether the current result supports or refutes the hypothesis, compare it with previous SOTA results, and suggest improvements or new directions.
+
+    Operation logic:
+      1. All factors that surpass SOTA in previous attempts are included in the SOTA factor library.
+      2. New experiments generate new factors, combined with the SOTA library.
+      3. Combined factors are evaluated via IC-weighted combination (positive-IC factors get more weight, negative-IC get zero) and LightGBM with raw feature augmentation.
+      4. LGB_IC and LGB_ICIR are the PRIMARY metrics — they measure true out-of-sample predictive power of LightGBM trained on ALL features (LLM factors + raw price/fundamental data).
+      5. IC and ICIR measure the linear IC-weighted combination of LLM-generated factors only.
+
+    When judging the results:
+      1. Compare LGB_IC primarily. Higher LGB_IC = better predictive model. If LGB_IC improved, set Replace Best Result = yes.
+      2. Also consider IC (linear combination). If both LGB_IC and IC improved, definitely Replace Best Result = yes.
+      3. If BOTH LGB_IC and IC worsened, set Replace Best Result = no.
+      4. If mixed, prioritize LGB_IC since it captures non-linear factor combinations.
+
+    IMPORTANT: Fundamental-based factors (cash flow yield, accruals, ROE, ROA, earnings yield, buyback yield) have the HIGHEST importance in the LightGBM model. Prioritize suggesting fundamental factor variations.
+    Also suggest: momentum (12-1 month), reversal (5-day), 52-week high distance, volume patterns.
+
+    Respond in JSON format:
+    {
+      "Observations": "Your overall observations here",
+      "Feedback for Hypothesis": "Observations related to the hypothesis",
+      "New Hypothesis": "Your new hypothesis here",
+      "Reasoning": "Reasoning for the new hypothesis",
+      "Replace Best Result": "yes or no"
+    }
+  user: |-
+    Target hypothesis:
+    {{ hypothesis_text }}
+    Tasks and Factors:
+    {% for task in task_details %}
+      - {{ task.factor_name }}: {{ task.factor_description }}
+        - Factor Formulation: {{ task.factor_formulation }}
+        - Variables: {{ task.variables }}
+        - Factor Implementation: {{ task.factor_implementation }}
+        {% if task.factor_implementation == "False" %}
+        **Note: This factor was not implemented in the current experiment.**
+        {% endif %}
+    {% endfor %}
+    Combined Results:
+    {{ combined_result }}
+
+    Analyze the combined result's ability to:
+    1. Support or refute the hypothesis.
+    2. Show improvement or deterioration compared to the SOTA experiment.

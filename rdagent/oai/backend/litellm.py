@@ -180,7 +180,8 @@ class LiteLLMAPIBackend(APIBackend):
             if LITELLM_SETTINGS.log_llm_chat_content:
                 logger.info("\n", raw=True, tag="llm_messages")
         else:
-            content = str(response.choices[0].message.content)
+            raw_content = response.choices[0].message.content
+            content = raw_content if raw_content is not None else ""
             finish_reason = response.choices[0].finish_reason
             finish_reason_str = (
                 f"({LogColors.RED}Finish reason: {finish_reason}{LogColors.END})"

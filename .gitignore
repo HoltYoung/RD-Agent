@@ -183,3 +183,9 @@ static/
 .cursor/
 .claude/
 AGENTS.md
+# Local data and secrets
+.env
+nul
+universe_data/
+git_ignore_folder/
+prompt_cache.db
